@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Secrets (copy config.example.py → config.py)
+config.py
+.claude/settings.json
+
+# Runtime data
+*.log
+todo_store.json
+conversation_store.json
+memory_store.json
+inspiration_store.json
+test_result.txt
+
+# Test/temp scripts
+pc-agent/test_check.ps1
+pc-agent/test_step1_kill.ps1
+pc-agent/pc_agent.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
