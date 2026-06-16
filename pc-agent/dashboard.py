@@ -24,7 +24,7 @@ _state_lock = threading.Lock()
 
 _state = {
     "connected": False,           # 是否已连接云端
-    "cloud_host": "122.51.207.16:9527",
+    "cloud_host": "not-connected",
     "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "last_heartbeat": None,       # 上次心跳时间
     "last_request": None,         # 最近一次文件操作请求

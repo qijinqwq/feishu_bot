@@ -3,7 +3,7 @@
 连接云端 PC Bridge，接收文件操作请求 → 调用本地 Claude → 回传结果。
 
 功能：
-  - WebSocket 长连接 ws://122.51.207.16:9527
+  - WebSocket 长连接 ws://<cloud_host>:9527
   - 30s 心跳维持在线
   - 文件操作通过本地 Claude daemon 执行
   - 连接时自动从云端同步灵感 → 桌面 灵感记录.md
@@ -38,11 +38,15 @@ import dashboard
 TZ = ZoneInfo("Asia/Shanghai")
 
 # ============================================================
-# 配置
+# 配置（真实值从项目根目录 _local_config.py 读取，不入 git）
 # ============================================================
 
-CLOUD_HOST = "122.51.207.16"
-CLOUD_PORT = 9527
+try:
+    from _local_config import CLOUD_HOST, CLOUD_PORT  # type: ignore
+except ImportError:
+    CLOUD_HOST = "your-server-ip"
+    CLOUD_PORT = 9527
+
 DASHBOARD_PORT = 9528
 HEARTBEAT_INTERVAL = 30
 RECONNECT_DELAY = 10  # 断线重连间隔（秒）

@@ -3,7 +3,7 @@ cd /d "%~dp0"
 
 echo ============================================
 echo   PC Agent - Physical Machine Agent
-echo   Cloud: ws://122.51.207.16:9527
+echo   Cloud: ws://your-server-ip:9527
 echo ============================================
 echo   Dashboard: http://localhost:9528
 echo   Stop:      Double-click "Stop PC Agent" on Desktop
