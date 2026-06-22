@@ -410,15 +410,16 @@ def route_message(chat_id: str, text: str, send_fn) -> Optional[str]:
             _async_reply(send_fn, chat_id, lambda p=prompt: call_claude(p))
         return None
 
+    # 灵感命令 → 同步（必须在记忆检测之前，因为"灵感"前缀意图明确，
+    # 避免被记忆模块的关键词（如"回忆"）误拦截）
+    insp_cmd = is_inspiration_command(text)
+    if insp_cmd in ("list", "add", "delete"):
+        return _cmd_inspiration(chat_id, text)
+
     # 记忆召回 → 同步
     memory_cmd = has_memory_command(text)
     if memory_cmd == "recall":
         return _cmd_memory(chat_id, text, send_fn)
-
-    # 灵感命令 → 同步
-    insp_cmd = is_inspiration_command(text)
-    if insp_cmd in ("list", "add", "delete"):
-        return _cmd_inspiration(chat_id, text)
 
     # "整理灵感" → 异步 Claude
     if "整理灵感" in text or "总结灵感" in text:

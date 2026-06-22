@@ -243,7 +243,8 @@ def has_memory_command(text: str) -> Optional[str]:
 
     recall_patterns = [
         "你记得什么", "你记得我", "记忆有哪些", "查看记忆", "记忆列表",
-        "你有什么记忆", "你知道我", "回忆", "你了解我",
+        "你有什么记忆", "你知道我", "你回忆一下", "你回忆",
+        "帮我回忆", "你还记得", "你了解我",
         "what do you remember", "what do you know about me",
         "list memories", "show memories", "recall",
     ]
