@@ -1,6 +1,7 @@
 """
 飞书个人助手 — 灵感记录管理
 飞书端口述灵感 → 云端 JSON 存储 → PC 连接时自动同步到桌面 灵感记录.md
+支持智能回顾提醒：录入灵感时自动分析是否需要回顾 + 定时推送。
 
 灵感类型:
   - idea:    创意想法
@@ -51,7 +52,7 @@ def _write_all(items: list[dict]) -> None:
 # ============================================================
 
 def add_inspiration(content: str, insp_type: str = "idea",
-                    source: str = "feishu") -> dict:
+                    source: str = "feishu", chat_id: str = "") -> dict:
     """
     添加一条灵感。
 
@@ -59,6 +60,7 @@ def add_inspiration(content: str, insp_type: str = "idea",
         content:   灵感内容
         insp_type: idea / note / link / task
         source:    来源
+        chat_id:   飞书会话 ID（用于回顾提醒推送）
 
     Returns:
         新创建的灵感 dict
@@ -75,6 +77,10 @@ def add_inspiration(content: str, insp_type: str = "idea",
         "source": source,
         "created_at": datetime.now(TZ).isoformat(),
         "synced_to_pc": False,
+        # 智能回顾提醒字段（后台 Claude 分析后填充）
+        "review_at": None,
+        "review_reason": None,
+        "chat_id": chat_id,
     }
     items.append(insp)
     _write_all(items)
@@ -127,6 +133,66 @@ def get_unsynced() -> list[dict]:
 
 def count() -> int:
     return len(_read_all())
+
+
+# ============================================================
+# 智能回顾提醒
+# ============================================================
+
+def set_inspiration_review(insp_id: int, review_info: dict) -> bool:
+    """
+    为指定灵感设置回顾提醒信息。
+
+    Args:
+        insp_id:     灵感 ID
+        review_info: {"review_at": "2026-...", "review_reason": "...", "review_cycle": null}
+
+    Returns:
+        是否成功
+    """
+    items = _read_all()
+    for it in items:
+        if it.get("id") == insp_id:
+            it["review_at"] = review_info.get("review_at")
+            it["review_reason"] = review_info.get("reason") or review_info.get("review_reason")
+            it["review_cycle"] = review_info.get("review_cycle")
+            _write_all(items)
+            log.info("灵感 #%d 已设置回顾提醒: %s", insp_id, it["review_at"])
+            return True
+    return False
+
+
+def get_due_for_review() -> list[dict]:
+    """
+    获取所有 review_at 已到期（≤ 当前时间）且未标记完成的灵感。
+    用于定时提醒检查。
+    """
+    items = _read_all()
+    due = []
+    for it in items:
+        review_at = it.get("review_at")
+        if not review_at:
+            continue
+        # 已 review 过的标记（review_at 被清除 = None）跳过
+        if it.get("reviewed"):
+            continue
+        due.append(it)
+    return due
+
+
+def mark_reviewed(insp_id: int) -> bool:
+    """
+    标记灵感已回顾，清除 review_at 防止重复提醒。
+    """
+    items = _read_all()
+    for it in items:
+        if it.get("id") == insp_id:
+            it["review_at"] = None
+            it["reviewed"] = True
+            _write_all(items)
+            log.info("灵感 #%d 已标记回顾完成", insp_id)
+            return True
+    return False
 
 
 # ============================================================

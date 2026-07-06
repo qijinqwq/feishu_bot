@@ -16,7 +16,7 @@ from typing import Optional
 
 from todo_manager import (
     add_todo, list_todos, complete_todo, delete_todo,
-    parse_todo_from_msg,
+    parse_todo_from_msg, analyze_inspiration_for_review,
 )
 from llm_bridge import call_claude, quick_intent
 from memory_manager import (
@@ -28,9 +28,27 @@ from inspiration_manager import (
     delete_inspiration, count as inspiration_count,
 )
 from pc_bridge import is_pc_online, send_to_pc
+from order_handler import OrderHandler
 from config import TIMEZONE, TZ
 
 log = logging.getLogger("agent.msg")
+
+# ============================================================
+# 点餐模块（延迟初始化）
+# ============================================================
+
+_order_handler: Optional[OrderHandler] = None
+
+
+def init_order_handler(mcd_client, allowed_users: set):
+    """由 agent.py 在启动时调用，注入 MCD 客户端和授权用户。"""
+    global _order_handler
+    _order_handler = OrderHandler(mcd_client, allowed_users)
+    if allowed_users:
+        log.info("点餐模块已初始化 (授权用户: %d 个)", len(allowed_users))
+    else:
+        log.info("点餐模块已初始化 (授权用户: 全部)")
+
 
 # ============================================================
 # 异步工具
@@ -98,13 +116,18 @@ def _cmd_help() -> str:
 
 
 def _add_todo_with_claude(item_text: str, chat_id: str, send_fn) -> str:
-    """用 Claude 解析待办时间 + 内容，然后存入待办列表。"""
+    """用 Claude 解析待办时间 + 内容 + 重复周期，然后存入待办列表。"""
     from todo_manager import parse_todo_from_msg as parse_fn
     parsed = parse_fn(item_text)
     if parsed:
-        todo = add_todo(parsed["content"], parsed.get("remind_at"), chat_id)
+        repeat = parsed.get("repeat")
+        repeat_labels = {"daily": " 🔁每天", "weekly": " 🔁每周", "monthly": " 🔁每月",
+                         "yearly": " 🔁每年", "weekdays": " 🔁工作日"}
+        repeat_label = repeat_labels.get(repeat, "")
+        todo = add_todo(parsed["content"], parsed.get("remind_at"), chat_id,
+                        repeat=repeat)
         remind_info = f"\n⏰ 提醒时间: {parsed['remind_at']}" if parsed.get("remind_at") else ""
-        return f"✅ 已添加待办 **#{todo['id']}**: {todo['content']}{remind_info}"
+        return f"✅ 已添加待办 **#{todo['id']}**: {todo['content']}{remind_info}{repeat_label}"
     else:
         todo = add_todo(item_text, None, chat_id)
         return f"✅ 已添加待办 **#{todo['id']}**: {todo['content']}\n（未识别到提醒时间，可后续修改）"
@@ -123,10 +146,13 @@ def _cmd_todo(chat_id: str, text: str, send_fn=None) -> Optional[str]:
         if not todos:
             return "📋 待办列表为空。试试 `/待办 添加 你的事项`"
         lines = ["📋 **待办列表**\n"]
+        repeat_icons = {"daily": "🔁", "weekly": "🔁", "monthly": "🔁",
+                        "yearly": "🔁", "weekdays": "🔁"}
         for t in todos:
             icon = "✅" if t["status"] == "done" else "⬜"
             remind = f" ⏰ {t['remind_at']}" if t.get("remind_at") else ""
-            lines.append(f"{icon} **#{t['id']}** {t['content']}{remind}")
+            repeat_icon = repeat_icons.get(t.get("repeat"), "")
+            lines.append(f"{icon} **#{t['id']}** {t['content']}{remind} {repeat_icon}")
         return "\n".join(lines)
 
     elif body.startswith("添加") or body.startswith("add"):
@@ -136,7 +162,8 @@ def _cmd_todo(chat_id: str, text: str, send_fn=None) -> Optional[str]:
 
         time_keywords = ["明天", "后天", "下周", "下个", "今天", "下午", "上午",
                          "晚上", "早上", "中午", "明早", "明晚", "周", "星期",
-                         "点半", "点", "分钟后", "小时后", "号", "日"]
+                         "点半", "点", "分钟后", "小时后", "号", "日",
+                         "每天", "每日", "天天", "每隔", "工作日"]
         needs_time_parse = any(kw in item_text for kw in time_keywords)
 
         if needs_time_parse:
@@ -172,7 +199,8 @@ def _cmd_todo(chat_id: str, text: str, send_fn=None) -> Optional[str]:
     else:
         time_keywords = ["明天", "后天", "下周", "下个", "今天", "下午", "上午",
                          "晚上", "早上", "中午", "明早", "明晚", "周", "星期",
-                         "点半", "点", "分钟后", "小时后", "号", "日"]
+                         "点半", "点", "分钟后", "小时后", "号", "日",
+                         "每天", "每日", "天天", "每隔", "工作日"]
         needs_time_parse = any(kw in body for kw in time_keywords)
 
         if needs_time_parse and send_fn:
@@ -215,7 +243,8 @@ def _cmd_inspiration(chat_id: str, text: str) -> Optional[str]:
             type_icon = {"idea": "💡", "note": "📝", "link": "🔗", "task": "📋"}.get(
                 it.get("type", "idea"), "💡")
             synced = " ✅" if it.get("synced_to_pc") else ""
-            lines.append(f"{type_icon} **#{it['id']}** {it['content'][:100]}{synced}")
+            review = " 🔍待回顾" if it.get("review_at") and not it.get("reviewed") else ""
+            lines.append(f"{type_icon} **#{it['id']}** {it['content'][:100]}{synced}{review}")
         return "\n".join(lines)
 
     if cmd == "add":
@@ -233,8 +262,12 @@ def _cmd_inspiration(chat_id: str, text: str) -> Optional[str]:
                 insp_type = "link"
             elif any(kw in content for kw in ["待办", "任务", "要做", "完成"]):
                 insp_type = "task"
-            insp = add_inspiration(content, insp_type=insp_type)
+            insp = add_inspiration(content, insp_type=insp_type, chat_id=chat_id)
             type_label = {"idea": "💡 灵感", "note": "📝 笔记", "link": "🔗 链接", "task": "📋 任务"}
+
+            # ── 后台分析是否需要回顾提醒 ──
+            _analyze_review_background(insp["id"], content, insp_type, chat_id, send_fn)
+
             return f"{type_label.get(insp_type, '💡')} 已记录 **#{insp['id']}**: {insp['content'][:120]}"
         return "❓ 请告诉我具体要记录什么。例如: `灵感 写一个关于猫的养成游戏`"
 
@@ -303,6 +336,38 @@ def _cmd_memory(chat_id: str, text: str, send_fn) -> Optional[str]:
         return "❓ 请告诉我具体要删除哪条记忆。例如: `忘了 咖啡`"
 
     return None
+
+
+# ============================================================
+# 灵感智能回顾 — 后台分析
+# ============================================================
+
+def _analyze_review_background(insp_id: int, content: str, insp_type: str,
+                                chat_id: str, send_fn):
+    """后台分析灵感是否需要回顾提醒，需要则自动设置 + 通知用户。"""
+
+    def _worker():
+        try:
+            review_info = analyze_inspiration_for_review(content, insp_type)
+            if not review_info or not review_info.get("needs_review"):
+                return
+
+            from inspiration_manager import set_inspiration_review
+            ok = set_inspiration_review(insp_id, review_info)
+            if not ok:
+                return
+
+            review_at = review_info.get("review_at", "")
+            reason = review_info.get("reason", "到时候再回顾一下这个想法~")
+
+            send_fn(chat_id,
+                    f"💡 关于灵感 **#{insp_id}**: {reason}\n"
+                    f"⏰ 我会在 {review_at} 提醒你回顾~")
+        except Exception:
+            pass  # 静默失败，回顾提醒是增值功能不影响主流程
+
+    t = threading.Thread(target=_worker, daemon=True, name="insp-review")
+    t.start()
 
 
 # ============================================================
@@ -462,6 +527,12 @@ def route_message(chat_id: str, text: str, send_fn) -> Optional[str]:
     # 待办关键词 → 同步处理
     if _looks_like_todo(text):
         return _cmd_todo(chat_id, text, send_fn)
+
+    # 🍟 麦当劳点餐 → 状态机处理（同步）
+    if _order_handler is not None:
+        order_reply = _order_handler.handle(chat_id, text)
+        if order_reply is not None:
+            return order_reply
 
     # 简短问候 → 同步友好回复
     if _is_greeting(text):
