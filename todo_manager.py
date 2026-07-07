@@ -357,8 +357,18 @@ def shutdown_reminder_engine():
         log.info("定时提醒引擎已停止")
 
 
+# 补发标记：首次检查时补发启动前 6 小时内错过的提醒
+_catchup_done = False
+_CATCHUP_WINDOW = 6 * 3600  # 6 小时内的错过提醒可补发
+
+
 def _check_and_remind():
-    """检查所有待办，发送到期提醒。对重复周期自动推进到下一次。"""
+    """检查所有待办，发送到期提醒。对重复周期自动推进到下一次。
+
+    首次运行时会补发最近 6 小时内因故障/重启错过的一次性提醒。
+    """
+    global _catchup_done
+
     if _send_message_cb is None:
         return
 
@@ -379,13 +389,24 @@ def _check_and_remind():
         except ValueError:
             continue
 
-        # 在提醒时间 ±30 秒窗口内触发
-        delta = abs((remind_dt - now).total_seconds())
-        if delta > REMINDER_CHECK_SECONDS / 2:
+        delta = (remind_dt - now).total_seconds()
+        repeat = t.get("repeat")
+
+        # 正常窗口：±30 秒内触发
+        in_window = abs(delta) <= REMINDER_CHECK_SECONDS / 2
+
+        # 补发窗口：首次检查时，已过期且 6 小时内的一次性提醒
+        is_catchup = (
+            not _catchup_done
+            and not repeat
+            and delta < -REMINDER_CHECK_SECONDS / 2
+            and -delta <= _CATCHUP_WINDOW
+        )
+
+        if not in_window and not is_catchup:
             continue
 
         chat_id = t.get("chat_id", "")
-        repeat = t.get("repeat")
 
         # ── 构建提醒消息 ──
         repeat_labels = {
@@ -394,10 +415,12 @@ def _check_and_remind():
         }
         repeat_label = repeat_labels.get(repeat, "")
 
+        overdue_tag = "⚠️ 错过提醒，补发: " if is_catchup else ""
+
         msg = (
-            f"📌 **待办提醒**\n\n"
+            f"{overdue_tag}📌 **待办提醒**\n\n"
             f"📋 {t['content']}\n"
-            f"🕐 时间: {remind_str}"
+            f"🕐 原定时间: {remind_str}"
             + (f"\n{repeat_label}" if repeat_label else "")
             + f"\n📅 创建于: {t['created_at']}\n\n"
             f"回复「/待办 完成 {t['id']}」标记为已完成"
@@ -405,7 +428,8 @@ def _check_and_remind():
 
         try:
             _send_message_cb(chat_id, msg)
-            log.info("已发送提醒: #%d %s", t["id"], t["content"])
+            log.info("已发送提醒: #%d %s%s",
+                     t["id"], "补发 " if is_catchup else "", t["content"])
         except Exception as exc:
             log.exception("发送提醒失败: #%d, %s", t["id"], exc)
 
@@ -422,6 +446,9 @@ def _check_and_remind():
             t["remind_at"] = None
 
     _write_todos(todos)
+
+    if not _catchup_done:
+        _catchup_done = True
 
 
 def _check_inspiration_reviews():
@@ -446,9 +473,8 @@ def _check_inspiration_reviews():
         except (ValueError, TypeError):
             continue
 
-        # ±45 秒窗口
-        delta = abs((review_dt - now).total_seconds())
-        if delta > 45:
+        # 到期即发（review_at ≤ now），不设精确窗口
+        if review_dt > now:
             continue
 
         chat_id = item.get("chat_id", "")
