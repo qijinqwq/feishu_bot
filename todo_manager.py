@@ -33,6 +33,8 @@ def _advance_reminder(remind_at_str: str, repeat: str) -> Optional[str]:
 
     try:
         dt = datetime.fromisoformat(remind_at_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=TZ)
     except (ValueError, TypeError):
         return None
 
@@ -372,6 +374,8 @@ def _check_and_remind():
 
         try:
             remind_dt = datetime.fromisoformat(remind_str)
+            if remind_dt.tzinfo is None:
+                remind_dt = remind_dt.replace(tzinfo=TZ)
         except ValueError:
             continue
 
@@ -437,6 +441,8 @@ def _check_inspiration_reviews():
         review_str = item.get("review_at", "")
         try:
             review_dt = datetime.fromisoformat(review_str)
+            if review_dt.tzinfo is None:
+                review_dt = review_dt.replace(tzinfo=TZ)
         except (ValueError, TypeError):
             continue
 
