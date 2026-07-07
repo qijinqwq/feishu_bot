@@ -11,6 +11,7 @@
 
 import json
 import logging
+import re
 import threading
 from typing import Optional
 
@@ -160,13 +161,7 @@ def _cmd_todo(chat_id: str, text: str, send_fn=None) -> Optional[str]:
         if not item_text:
             return "❓ 请写明待办内容。例如: `/待办 添加 明天上午9点开会`"
 
-        time_keywords = ["明天", "后天", "下周", "下个", "今天", "下午", "上午",
-                         "晚上", "早上", "中午", "明早", "明晚", "周", "星期",
-                         "点半", "点", "分钟后", "小时后", "号", "日",
-                         "每天", "每日", "天天", "每隔", "工作日"]
-        needs_time_parse = any(kw in item_text for kw in time_keywords)
-
-        if needs_time_parse:
+        if _has_time_expression(item_text):
             _async_reply(send_fn, chat_id,
                          lambda t=item_text, c=chat_id, sfn=send_fn: _add_todo_with_claude(t, c, sfn))
             return None
@@ -197,13 +192,7 @@ def _cmd_todo(chat_id: str, text: str, send_fn=None) -> Optional[str]:
             return "❓ 请告诉我删除哪一条。例如: `/待办 删除 3`"
 
     else:
-        time_keywords = ["明天", "后天", "下周", "下个", "今天", "下午", "上午",
-                         "晚上", "早上", "中午", "明早", "明晚", "周", "星期",
-                         "点半", "点", "分钟后", "小时后", "号", "日",
-                         "每天", "每日", "天天", "每隔", "工作日"]
-        needs_time_parse = any(kw in body for kw in time_keywords)
-
-        if needs_time_parse and send_fn:
+        if _has_time_expression(body) and send_fn:
             _async_reply(send_fn, chat_id,
                          lambda t=body, c=chat_id, sfn=send_fn: _add_todo_with_claude(t, c, sfn))
             return None
@@ -371,6 +360,22 @@ def _analyze_review_background(insp_id: int, content: str, insp_type: str,
 
 
 # ============================================================
+# 时间检测（兼容全角冒号、中文数字等用户输入习惯）
+# ============================================================
+
+# 匹配 "10:20" "10：20" "10点20" "上午10点" 等时间表达
+_TIME_PATTERN = re.compile(
+    r'(\d{1,2}[：:点]\d{0,2})'    # 10:20 / 10：20 / 10点20 / 10点
+    r'|(上午|下午|晚上|早上|中午|明天|后天|今天|周[一二三四五六日天])'
+    r'|(\d{1,2}点半)'
+)
+
+def _has_time_expression(text: str) -> bool:
+    """快速检测是否包含时间表达（含全角冒号等用户常见输入）。"""
+    return bool(_TIME_PATTERN.search(text))
+
+
+# ============================================================
 # 辅助判断函数（不调 LLM，毫秒级）
 # ============================================================
 
@@ -399,7 +404,11 @@ def _looks_like_file_op(text: str) -> bool:
 
 def _looks_like_todo(text: str) -> bool:
     """快速判断是否为待办操作。"""
-    return any(kw in text for kw in ["待办", "提醒我", "提醒", "日程", "/todo"])
+    if any(kw in text for kw in ["待办", "提醒我", "提醒", "日程", "/todo"]):
+        return True
+    # "10:20提醒我吃药" 这种数字+冒号的时间修饰也视为待办
+    return _has_time_expression(text) and any(
+        kw in text for kw in ["提醒", "叫", "通知", "告诉"])
 
 
 def _is_greeting(text: str) -> bool:
